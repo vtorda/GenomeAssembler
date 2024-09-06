@@ -1,0 +1,31 @@
+FROM assembly_v0.0824:latest
+
+ENV tidyup=1
+
+# SPADES
+ENV spades_polish= 
+# to turn on spades polihing used the following argument value: --careful
+
+
+# Quast
+ENV ReportAll=--report-all-metrics
+ENV AddArgs= 
+ENV Quast_trimmom=0
+
+# multiQC
+ENV ReportWhat=Lighter
+#Trimmomatic or Lighter
+
+# Samtools
+ENV samtools=1
+
+# KAT
+ENV crashwait=20
+
+COPY ./Scripts/ $PATH_Scripts
+RUN ln -sf $PATH_Scripts/*.sh /usr/local/bin/
+RUN ln -sf $PATH_Scripts/*.R /usr/local/bin/
+
+
+USER repl
+WORKDIR /home/repl

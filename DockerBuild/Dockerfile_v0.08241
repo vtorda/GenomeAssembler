@@ -1,0 +1,4 @@
+FROM assembly_v0.0824:latest
+
+USER repl
+WORKDIR /home/repl

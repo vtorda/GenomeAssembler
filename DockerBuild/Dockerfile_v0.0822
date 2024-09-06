@@ -1,0 +1,260 @@
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND noninteractive 
+# ensure that I won't get questions during R installation: https://stackoverflow.com/questions/59692797/how-to-fill-user-input-for-interactive-command-for-run-command
+RUN apt-get update && apt-get install -y rename && apt-get clean && rm -rf /var/lib/apt/lists/*
+#####################################################################
+###                                                               ###
+### install java for fastqc and curl and unzip to download fastqc ###
+###                                                               ###
+#####################################################################
+RUN apt-get update && apt-get install -y default-jre && apt-get install -y curl && apt-get install -y unzip && apt-get clean && rm -rf /var/lib/apt/lists/*
+# setting a path argument for a place where manually installed programs will be placed
+ARG program_path=/usr/local
+WORKDIR $program_path
+
+######################
+###                ###
+### Install FastQC ###
+###                ###
+######################
+RUN curl https://www.bioinformatics.babraham.ac.uk/projects/fastqc/fastqc_v0.12.1.zip -o ./fastqc_v0.12.1.zip \
+&& unzip ./fastqc_v0.12.1.zip -d fastqc_v0.12.1 && rm ./fastqc_v0.12.1.zip
+# create a symbolic link so fastqc will be in the path
+RUN ln -s /usr/local/fastqc_v0.12.1/FastQC/fastqc /usr/local/bin/fastqc
+# an error occurred probably this package is missing from the system:
+RUN apt-get update -y && apt-get install -y libfindbin-libs-perl && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+#######################################
+###                                 ###
+### Install trimmomatic from github ###
+###                                 ###
+#######################################
+# first I need git and also ant
+RUN  apt-get update -y && apt-get install -y git && apt-get install -y ant && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/usadellab/Trimmomatic
+WORKDIR $program_path/Trimmomatic
+RUN sed 's/source="1.5"/source="1.6"/' build.xml > build2.xml && sed 's/target="1.5"/target="1.6"/' build2.xml > build3.xml \
+&& rm build.xml build2.xml && mv build3.xml build.xml
+RUN ant
+#####################################################
+###                                               ###
+### install seqtk to downsample my example fastqc ###
+###                                               ###
+#####################################################
+## but befor it I need to put make and gcc on the system
+RUN apt-get update && apt-get install -y make && apt-get install -y gcc && apt-get install -y libz-dev && apt-get clean && rm -rf /var/lib/apt/lists/*
+## now seqtk
+WORKDIR $program_path/seqtk
+RUN git clone https://github.com/lh3/seqtk.git
+WORKDIR $program_path/seqtk/seqtk
+RUN make
+RUN ln -s $program_path/seqtk/seqtk/seqtk /usr/local/bin/
+###########################################
+###                                     ###
+### install python and R then kmergenie ###
+###                                     ###
+###########################################
+##########
+# python #
+##########
+WORKDIR $program_path
+RUN  apt-get update -y && apt-get install python3 && apt-get install -y python3-pip && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --upgrade setuptools
+# for kmergenie I link python3 to python
+RUN ln -s /usr/bin/python3 /usr/local/bin/python
+#####
+# R #
+#####
+# https://www.digitalocean.com/community/tutorials/how-to-install-r-on-ubuntu-22-04
+# downloading R via cran
+# 1) download R project’s public GPG key 
+RUN apt-get update -y && apt-get install wget && apt-get install -y gpg && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | gpg --dearmor -o /usr/share/keyrings/r-project.gpg
+# 2) add the R source list to the sources.list.d directory, where APT will search for new sources
+RUN echo "deb [signed-by=/usr/share/keyrings/r-project.gpg] https://cloud.r-project.org/bin/linux/ubuntu jammy-cran40/" | tee -a /etc/apt/sources.list.d/r-project.list
+RUN apt-get update && apt-get install --no-install-recommends -y r-base
+#############
+# kmergenie #
+#############
+# It seems that we need g++ a so a C++ compile 
+RUN apt-get update -y && apt-get install -y g++ && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN curl http://kmergenie.bx.psu.edu/kmergenie-1.7051.tar.gz -o ./kmergenie-1.7051.tar.gz \
+&& tar -xf ./kmergenie-1.7051.tar.gz && rm ./kmergenie-1.7051.tar.gz
+WORKDIR $program_path/kmergenie-1.7051/
+RUN make
+RUN ln -s $program_path/kmergenie-1.7051/kmergenie /usr/local/bin/
+###############
+###         ###
+### Lighter ###
+###         ###
+###############
+#WORKDIR $program_path
+#RUN git clone https://github.com/mourisl/Lighter.git
+#WORKDIR $program_path/Lighter
+#RUN make
+#RUN ln -s $program_path/Lighter/lighter /usr/local/bin/
+
+############################
+###                      ###
+### Install R packages 1 ###
+###                      ### 
+############################
+
+RUN Rscript -e 'install.packages(c("stringr", "readr"), repos="https://cloud.r-project.org", clean = TRUE, verbose = FALSE)'
+
+#########################################
+###                                   ###
+### Using conda to install everything ###
+###                                   ###
+###  MAMBA IS MUCH BETTER THEN CONDA  ###
+###  https://gitlab.com/ezlab/busco/-/issues/700  ###
+#########################################
+# dependencies 
+WORKDIR $program_path
+RUN mkdir -p $program_path/miniconda3
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O $program_path/miniconda3/miniconda.sh && bash $program_path/miniconda3/miniconda.sh -b -u -p $program_path/miniconda3 && rm -rf $program_path/miniconda3/miniconda.sh
+RUN ln -s $program_path/miniconda3/bin/conda /usr/local/bin/
+RUN conda init bash
+RUN conda init zsh
+RUN conda install -n base --override-channels -c conda-forge mamba 'python_abi=*=*cp*'
+RUN for f in ls /usr/local/miniconda3/bin/*; do ln -s $f /usr/local/bin/ ; done
+RUN mamba create --quiet --yes --name kat_abyss_spades
+RUN mamba install -n kat_abyss_spades -c conda-forge -c bioconda kat=2.4.1 abyss=2.3.7 spades=3.15.5 masurca=4.1.0 && conda clean --force-pkgs-dirs
+RUN mamba create --quiet --yes --name quast
+RUN mamba install -n quast -c conda-forge -c bioconda quast=5.2.0 && conda clean --force-pkgs-dirs
+RUN mamba install -c bioconda -c conda-forge multiqc=1.17  idba=1.1.3 megahit=1.2.9 pilon=1.24 lighter=1.1.2 pyfasta=0.5.2 nextpolish=1.4.1 && conda clean --force-pkgs-dirs #qualimap=2.2.2a bandage=0.8.1
+# ncurses installation because samtools had a problem see: https://stackoverflow.com/questions/72103046/libtinfo-so-6-no-version-information-available-message-using-conda-environment
+
+#RUN conda create -n kat_abyss_spades -c conda-forge -c bioconda kat=2.4.1 abyss=2.3.7 spades=3.15.5 masurca=4.1.0 && conda clean --force-pkgs-dirs
+#RUN conda create -n masurca -c conda-forge -c bioconda masurca=4.1.0 && conda clean --force-pkgs-dirs
+#RUN conda create -n abyss -c conda-forge -c bioconda abyss=2.3.7 && conda clean --force-pkgs-dirs
+#RUN conda create -n spades -c conda-forge -c bioconda spades=3.15.5 && conda clean --force-pkgs-dirs
+#RUN conda install -c conda-forge -c bioconda multiqc=1.14 quast=5.2.0 && conda install -c bioconda idba=1.1.3 megahit=1.2.9 pilon=1.24 lighter=1.1.2 pyfasta=0.5.2 samtools=1.18 nextpolish=1.4.1 && conda clean --force-pkgs-dirs #qualimap=2.2.2a bandage=0.8.1
+
+
+RUN mamba create --quiet --yes --name busco
+RUN mamba install -n busco -c conda-forge -c bioconda busco=5.5.0 bwa=0.7.17 && conda clean --force-pkgs-dirs
+#RUN $program_path/miniconda3/bin/mamba update busco
+#RUN conda install --channel bioconda --channel conda-forge busco=5.5.0 multiqc=1.14 --experimental-solver=libmamba && conda clean --force-pkgs-dirs #
+
+
+#RUN conda create -n busco_env -c conda-forge -c bioconda busco=5.5.0 && conda clean --force-pkgs-dirs #
+#RUN for f in ls /usr/local/miniconda3/bin/*; do ln -s $f /usr/local/bin/ ; done
+
+##
+# REMOVE utility packages -> can I make the docker lighter?
+# ??? g++; gpg; wget; gcc, make, ant, git, curl
+
+RUN apt-get update && apt-get install -y procps time && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+##
+# change pilon memory usage
+#RUN sed -i -e "s/default_jvm_mem_opts = ['-Xms512m', '-Xmx1g']/default_jvm_mem_opts = ['-Xms512m', '-Xmx32g']/g" /usr/local/miniconda/bin/pilon
+#default_jvm_mem_opts = ['-Xms512m', '-Xmx1g']
+#RUN sed -i "s/^default_jvm_mem_opts/# default_jvm_mem_opts/" /usr/local/miniconda/bin/pilon
+#RUN sed -i "/# default_jvm_mem_opts.*/a default_jvm_mem_opts = ['-Xms512m', '-Xmx32g']" /usr/local/miniconda/bin/pilon
+#RUN sed -i "/# default_jvm_mem_opts/d" /usr/local/miniconda/bin/pilon
+
+###python package
+RUN pip install paralleltask
+
+
+#####################
+# Set up environments
+#####################
+
+#
+# VARIABLES
+#
+# Global variables
+ENV FILE_base=RHW620
+ENV FowardTail=_1.fastq.gz
+ENV ReverseTail=_2.fastq.gz
+ENV Threads=4
+
+#
+# PATHS
+#
+ENV PATH_UtilData=/home/repl/UtilityData
+ENV PATH_Output=/home/repl/Output/
+ENV PATH_Scripts=/home/repl/Scripts
+ENV PATH_Input=/home/repl/Input
+ENV PATH_Trimm=/usr/local/Trimmomatic/dist/jar/trimmomatic-0.40-rc1.jar
+
+#####
+# Turning on modules
+####
+ENV ReadProc=1
+ENV ABySS=1
+ENV SPAdes=1
+ENV masurca=1
+ENV megahit=1
+ENV IDBA=1
+ENV Polish=1
+ENV BUSCO=1
+ENV quast=1
+ENV KAT=1
+ENV multiqc=1
+
+# Trimmomatic variables
+ENV AdaptFile=NexteraTrueSeq3_adapters.fa
+ENV MinAdapter=2
+ENV Keep=true
+ENV LEADING=25
+ENV TRAILING=25
+ENV SLIDINGWINDOW=30
+ENV MINLEN=20
+
+# Abyss variables
+ENV K_list="33 50 70 90 110 120"
+ENV Abyss_mem=3G
+ENV kc_list="2 3"
+
+# SPAdes
+ENV Multicell=0
+ENV Meta=0
+
+# multiQC
+ENV ignore_quast=Trimmomatic
+
+# polishing
+ENV Pilon=0
+ENV PilonFix=bases
+ENV POLCA=1
+ENV NextPol=1
+ENV NextPolishRounds=2
+
+# BUSCO
+ENV odb=fungi_odb10
+
+#
+# Scripts
+#
+
+# Set up user folder
+RUN useradd -m repl
+RUN mkdir $PATH_UtilData
+RUN mkdir $PATH_Output
+RUN mkdir $PATH_Scripts
+RUN mkdir $PATH_Input
+COPY ./Input/ $PATH_UtilData
+COPY ./Scripts/ $PATH_Scripts
+RUN ln -s $PATH_Scripts/*.sh /usr/local/bin/
+RUN ln -s $PATH_Scripts/*.R /usr/local/bin/
+#RUN ln -s /usr/local/Trimmomatic/dist/jar/trimmomatic-0.40-rc1.jar /usr/local/bin/trimmomatic
+USER repl
+RUN echo "conda init bash" > ~/.bashrc
+RUN conda init bash
+WORKDIR /home/repl
+
+
+
+
+
+
+
+
+
+
+
+
